@@ -1,151 +1,133 @@
 const express = require('express');
 const multer = require('multer');
+const { body, validationResult } = require('express-validator');
 const path = require('path');
-const fs = require('fs');
 const router = express.Router();
 const connectToDatabase = require('../models/db');
 const logger = require('../logger');
 
 // Define the upload directory path
-const UPLOAD_DIRECTORY = path.join(__dirname, '../public/images');
+const directoryPath = 'public/images';
 
-// Ensure the directory exists
-if (!fs.existsSync(UPLOAD_DIRECTORY)) {
-  fs.mkdirSync(UPLOAD_DIRECTORY, { recursive: true });
-}
-
-// Set up storage for uploaded files
+// Multer storage setup
 const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, UPLOAD_DIRECTORY); // Specify the upload directory
-  },
-  filename: function (req, file, cb) {
-    cb(null, file.originalname); // Use the original file name
-  },
+    destination: (req, file, cb) => cb(null, directoryPath),
+    filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
+});
+const upload = multer({
+    storage,
+    limits: { fileSize: 2 * 1024 * 1024 }, // 2MB file size limit
 });
 
-const upload = multer({ storage: storage }).single('file');
-
-// Utility function to get the current timestamp
-const getCurrentTimestamp = () => Math.floor(new Date().getTime() / 1000);
+// Validation Middleware
+const validateSecondChanceItem = [
+    body('category').notEmpty().withMessage('Category is required'),
+    body('condition').notEmpty().withMessage('Condition is required'),
+    body('description').isString().withMessage('Description must be a string'),
+];
 
 // Get all secondChanceItems
-router.get('/', async (req, res, next) => {
-  logger.info('GET / called');
-  try {
-    const db = await connectToDatabase();
-    const collection = db.collection('secondChanceItems');
-    const secondChanceItems = await collection.find({}).toArray();
-    res.status(200).json(secondChanceItems);
-  } catch (error) {
-    logger.error('Error fetching items', error);
-    next(error);
-  }
-});
-
-// Add a new item
-router.post('/', async (req, res, next) => {
-  upload(req, res, async (err) => {
-    if (err) {
-      logger.error('File upload error', err);
-      return res.status(400).json({ error: 'File upload failed' });
-    }
-
+router.get('/', async (req, res) => {
     try {
-      const db = await connectToDatabase();
-      const collection = db.collection('secondChanceItems');
-      let secondChanceItem = req.body;
-
-      // Fetch the last item ID and increment it for the new item
-      const lastItem = await collection.find().sort({ id: -1 }).limit(1).next();
-      secondChanceItem.id = lastItem ? (parseInt(lastItem.id) + 1).toString() : '1';
-
-      // Set additional attributes
-      secondChanceItem.date_added = getCurrentTimestamp();
-
-      // Insert the new item
-      const result = await collection.insertOne(secondChanceItem);
-      res.status(201).json(result.ops[0]);
-    } catch (error) {
-      logger.error('Error adding new item', error);
-      next(error);
+        const db = await connectToDatabase();
+        const collection = db.collection("secondChanceItems");
+        const items = await collection.find({}).toArray();
+        res.json(items);
+    } catch (e) {
+        logger.error('Failed to fetch items', e);
+        res.status(500).json({ error: 'Internal Server Error' });
     }
-  });
 });
 
 // Get a single secondChanceItem by ID
-router.get('/:id', async (req, res, next) => {
-  const { id } = req.params;
-  try {
-    const db = await connectToDatabase();
-    const collection = db.collection('secondChanceItems');
-    const secondChanceItem = await collection.findOne({ id });
+router.get('/:id', async (req, res) => {
+    try {
+        const db = await connectToDatabase();
+        const collection = db.collection("secondChanceItems");
+        const { id } = req.params;
+        const item = await collection.findOne({ id });
 
-    if (!secondChanceItem) {
-      return res.status(404).json({ error: 'Item not found' });
+        if (!item) return res.status(404).json({ error: 'Item not found' });
+        res.json(item);
+    } catch (e) {
+        logger.error('Error fetching item', e);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
+
+// Add a new item
+router.post('/', upload.single('file'), validateSecondChanceItem, async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
     }
 
-    res.status(200).json(secondChanceItem);
-  } catch (error) {
-    logger.error('Error fetching item by ID', error);
-    next(error);
-  }
+    try {
+        const db = await connectToDatabase();
+        const collection = db.collection("secondChanceItems");
+        const lastItem = await collection.find().sort({ id: -1 }).limit(1).toArray();
+        const newId = lastItem.length ? parseInt(lastItem[0].id) + 1 : 1;
+
+        const newItem = {
+            ...req.body,
+            id: newId.toString(),
+            date_added: Date.now(),
+        };
+
+        await collection.insertOne(newItem);
+        logger.info('New item added successfully');
+        res.status(201).json({ message: 'Item added successfully' });
+    } catch (e) {
+        logger.error('Failed to add item', e);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
 });
 
 // Update an existing item
-router.put('/:id', async (req, res, next) => {
-  const { id } = req.params;
-  const updates = req.body;
-
-  try {
-    const db = await connectToDatabase();
-    const collection = db.collection('secondChanceItems');
-
-    // Validate if the item exists
-    const existingItem = await collection.findOne({ id });
-    if (!existingItem) {
-      logger.error('Item not found for update');
-      return res.status(404).json({ error: 'Item not found' });
+router.put('/:id', validateSecondChanceItem, async (req, res) => {
+    const { id } = req.params;
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
     }
 
-    updates.age_years = Number((updates.age_days / 365).toFixed(1));
-    updates.updatedAt = new Date();
+    try {
+        const db = await connectToDatabase();
+        const collection = db.collection("secondChanceItems");
+        const updatedItem = await collection.findOneAndUpdate(
+            { id },
+            { $set: { ...req.body, updatedAt: new Date() } },
+            { returnDocument: 'after' }
+        );
 
-    const updatedItem = await collection.findOneAndUpdate(
-      { id },
-      { $set: updates },
-      { returnDocument: 'after' }
-    );
+        if (!updatedItem.value) {
+            return res.status(404).json({ error: 'Item not found' });
+        }
 
-    if (updatedItem.value) {
-      res.status(200).json({ message: 'Update successful', item: updatedItem.value });
-    } else {
-      res.status(400).json({ error: 'Update failed' });
+        res.json({ message: 'Item updated successfully', data: updatedItem.value });
+    } catch (e) {
+        logger.error('Failed to update item', e);
+        res.status(500).json({ error: 'Internal Server Error' });
     }
-  } catch (error) {
-    logger.error('Error updating item', error);
-    next(error);
-  }
 });
 
 // Delete an existing item
-router.delete('/:id', async (req, res, next) => {
-  const { id } = req.params;
+router.delete('/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const db = await connectToDatabase();
+        const collection = db.collection("secondChanceItems");
+        const deleteResult = await collection.deleteOne({ id });
 
-  try {
-    const db = await connectToDatabase();
-    const collection = db.collection('secondChanceItems');
-    const deletedResult = await collection.deleteOne({ id });
+        if (deleteResult.deletedCount === 0) {
+            return res.status(404).json({ error: 'Item not found' });
+        }
 
-    if (deletedResult.deletedCount === 0) {
-      return res.status(404).json({ error: 'Item not found' });
+        res.json({ message: 'Item deleted successfully' });
+    } catch (e) {
+        logger.error('Failed to delete item', e);
+        res.status(500).json({ error: 'Internal Server Error' });
     }
-
-    res.status(200).json({ message: 'Item deleted successfully' });
-  } catch (error) {
-    logger.error('Error deleting item', error);
-    next(error);
-  }
 });
 
 module.exports = router;
