@@ -29,8 +29,8 @@ app.use(express.json());
 //  Import secondChanceItemsRoutes
 const secondChanceItemsRoutes = require('./routes/secondChanceItemsRoutes');
 
-// Search API Task 1: import the searchRoutes and store in a constant called searchRoutes
-//{{insert code here}}
+// Import searchRoutes
+const searchRoutes = require('./routes/searchRoutes');
 
 
 const pinoHttp = require('pino-http');
@@ -45,8 +45,8 @@ app.use(pinoHttp({ logger }));
 // Use secondChanceItemsRoutes
 app.use('/api/secondchance/items', secondChanceItemsRoutes);
 
-// Search API Task 2: add the searchRoutes to the server by using the app.use() method.
-//{{insert code here}}
+// Use searchRoutes
+app.use('/api/secondchance/search', searchRoutes);
 
 
 // Global Error Handler
